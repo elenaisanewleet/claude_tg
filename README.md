@@ -86,10 +86,19 @@ docker compose up -d
 
 ### Автозапуск
 
-* **Linux (systemd)**: `deploy/claude-tg.service` — поправь пути, затем
-  `sudo systemctl enable --now claude-tg`.
-* **macOS (launchd)**: `deploy/com.claude-tg.bot.plist` — замени `USERNAME`,
-  положи в `~/Library/LaunchAgents/`, потом `launchctl load -w …`.
+**macOS** — одной командой, пути подставятся сами:
+
+```bash
+./deploy/autostart-macos.sh            # установить и запустить
+./deploy/autostart-macos.sh --status   # проверить
+./deploy/autostart-macos.sh --remove   # выключить
+```
+
+Бот поднимется после перезагрузки и переживёт падение. Логи —
+`~/Library/Logs/claude-tg.log`.
+
+**Linux** — `deploy/claude-tg.service`: поправь `User=` и пути, затем
+`sudo systemctl enable --now claude-tg`.
 
 ### На сервере
 
