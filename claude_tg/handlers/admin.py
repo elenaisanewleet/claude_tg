@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import time
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -18,6 +19,28 @@ from .common import guarded, owner_only, reply
 log = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"<[^>]+>")
+
+PROGRESS_INTERVAL = 2.0  # не чаще одной правки сообщения в 2 секунды
+PROGRESS_WIDTH = 12
+LINE_LIMIT = 120
+
+
+def progress_text(event: updater.ProgressEvent) -> str:
+    """Шкала, текущий шаг и последняя строка вывода команды."""
+    filled = round(event.fraction * PROGRESS_WIDTH)
+    bar = "▰" * filled + "▱" * (PROGRESS_WIDTH - filled)
+    percent = round(event.fraction * 100)
+    elapsed = f"{int(event.elapsed) // 60:d}:{int(event.elapsed) % 60:02d}"
+
+    if event.index > event.total:
+        head = f"✅ Готово · {elapsed}"
+    else:
+        head = f"🔄 Шаг {event.index} из {event.total} · {elapsed}"
+
+    lines = [head, f"{bar} {percent}%", f"<code>{html.escape(event.label)}</code>"]
+    if event.line:
+        lines.append(f"<code>{html.escape(event.line[:LINE_LIMIT])}</code>")
+    return "\n".join(lines)
 
 HELP = """🤖 <b>Claude в Telegram</b>
 
@@ -104,14 +127,23 @@ async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     app = get_app(context)
     message = await reply(update, "🔄 Обновляю Claude Code и SDK…")
+    last_edit = 0.0
 
-    async def show_step(step: str) -> None:
-        """Показывать текущий шаг: brew может качать пакет несколько минут."""
+    async def show_step(event: updater.ProgressEvent) -> None:
+        """Шкала и последняя строка вывода: brew качает пакет минутами.
+
+        Правки прорежаем — Telegram не любит частых edit'ов, а вывод команд
+        сыплется десятками строк в секунду.
+        """
+        nonlocal last_edit
         if message is None:
             return
-        await message.edit_text(
-            f"🔄 Обновляю…\n<code>{html.escape(step)}</code>", parse_mode=ParseMode.HTML
-        )
+        now = time.monotonic()
+        final = event.index > event.total
+        if not final and now - last_edit < PROGRESS_INTERVAL:
+            return
+        last_edit = now
+        await message.edit_text(progress_text(event), parse_mode=ParseMode.HTML)
 
     try:
         report = await updater.run_update(app.settings.claude_cli, progress=show_step)

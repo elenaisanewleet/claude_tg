@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 import shutil
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
@@ -21,16 +23,37 @@ CLI_PACKAGE = "@anthropic-ai/claude-code"
 SDK_PACKAGE = "claude-agent-sdk"
 TIMEOUT = 600
 
-# Куда сообщать о текущем шаге (например, правкой сообщения в Telegram).
-Progress = Callable[[str], Awaitable[None]] | None
+_LINE_BREAK = re.compile(r"[\r\n]")
 
 
-async def _announce(progress: Progress, step: str) -> None:
-    """Сообщить о шаге. Не даём косметике уронить обновление."""
+@dataclass
+class ProgressEvent:
+    """Состояние обновления для показа пользователю."""
+
+    index: int  # номер текущего шага, с единицы
+    total: int  # сколько шагов запланировано
+    label: str  # что выполняется прямо сейчас
+    line: str = ""  # последняя строка вывода команды
+    elapsed: float = 0.0  # секунд с начала обновления
+
+    @property
+    def fraction(self) -> float:
+        """Доля выполненного: шаг считается завершённым, когда начался следующий."""
+        if self.total <= 0:
+            return 0.0
+        return min(1.0, max(0.0, (self.index - 1) / self.total))
+
+
+# Куда сообщать о ходе дела (например, правкой сообщения в Telegram).
+Progress = Callable[[ProgressEvent], Awaitable[None]] | None
+
+
+async def _announce(progress: Progress, event: ProgressEvent) -> None:
+    """Сообщить о прогрессе. Не даём косметике уронить обновление."""
     if progress is None:
         return
     try:
-        await progress(step)
+        await progress(event)
     except Exception:  # noqa: BLE001
         log.debug("Не смог показать прогресс обновления", exc_info=True)
 
@@ -85,22 +108,76 @@ class UpdateReport:
         return "\n".join(lines)
 
 
-async def _run(cmd: list[str], timeout: int = TIMEOUT) -> tuple[int, str]:
-    """Запустить процесс, вернуть (код возврата, слитый stdout+stderr)."""
+async def _terminate(proc: asyncio.subprocess.Process) -> None:
+    """Добить процесс и дождаться его, чтобы не оставить зомби и открытые пайпы."""
+    if proc.returncode is not None:
+        return
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        return
+    try:
+        await proc.wait()
+    except Exception:  # noqa: BLE001 — процесс уже мог уйти
+        log.debug("Не смог дождаться завершения процесса", exc_info=True)
+
+
+async def _run(
+    cmd: list[str],
+    timeout: int = TIMEOUT,
+    on_line: Callable[[str], Awaitable[None]] | None = None,
+) -> tuple[int, str]:
+    """Запустить процесс, вернуть (код возврата, слитый stdout+stderr).
+
+    Читаем вывод кусками, а не построчно: brew и pip рисуют прогресс через
+    возврат каретки, и `readline()` на таком выводе молчал бы до самого конца.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=1024 * 1024,
         )
     except FileNotFoundError:
         return 127, f"команда не найдена: {cmd[0]}"
+
+    collected: list[str] = []
+    pending = ""
+
+    async def pump() -> None:
+        nonlocal pending
+        assert proc.stdout is not None
+        while True:
+            data = await proc.stdout.read(4096)
+            if not data:
+                break
+            text = data.decode("utf-8", "replace")
+            collected.append(text)
+            if on_line is None:
+                continue
+            parts = _LINE_BREAK.split(pending + text)
+            pending = parts.pop()
+            for part in parts:
+                part = part.strip()
+                if part:
+                    await on_line(part)
+
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            await pump()
+            await proc.wait()
     except TimeoutError:
-        proc.kill()
+        await _terminate(proc)
         return 124, f"таймаут {timeout} c"
-    return proc.returncode or 0, (out or b"").decode("utf-8", "replace").strip()
+    except BaseException:
+        # Колбэк упал или ход отменили — не оставляем процесс жить дальше.
+        await _terminate(proc)
+        raise
+
+    if on_line is not None and pending.strip():
+        await on_line(pending.strip())
+    return proc.returncode or 0, "".join(collected).strip()
 
 
 async def cli_version(cli_path: str | None = None) -> str:
@@ -165,42 +242,64 @@ async def run_update(
     report.cli_before = await cli_version(binary)
     report.sdk_before = sdk_version()
 
-    await _announce(progress, "claude update")
-    code, out = await _run([binary, "update"])
-    if code == 0:
-        report.steps.append(Step("claude update", True, _tail(out)))
-    else:
-        report.steps.append(Step("claude update", False, _tail(out)))
-        if shutil.which("npm"):
-            await _announce(progress, "npm install -g claude-code")
-            code, out = await _run(["npm", "install", "-g", f"{CLI_PACKAGE}@latest"])
-            report.steps.append(Step("npm i -g claude-code@latest", code == 0, _tail(out)))
+    # План считаем заранее, чтобы шкала прогресса не врала. Если Claude Code
+    # поставлен каском, его версией распоряжается brew — `claude update` там
+    # завершается успешно и ничего не меняет, поэтому brew нужен всегда.
+    cask = await brew_cask_name()
+    plan = ["claude update"]
+    if cask:
+        plan.append(f"brew upgrade --cask {cask}")
+    if with_sdk:
+        plan.append(f"pip install -U {SDK_PACKAGE}")
+    total = len(plan)
+    started = time.monotonic()
 
-    # Если Claude Code поставлен Homebrew, его версией распоряжается брю:
-    # `claude update` завершается успешно, но ничего не меняет.
-    if await cli_version(binary) == report.cli_before:
-        cask = await brew_cask_name()
-        if cask:
-            await _announce(progress, f"brew upgrade --cask {cask}")
-            code, out = await _run(["brew", "upgrade", "--cask", cask])
-            report.steps.append(Step(f"brew upgrade --cask {cask}", code == 0, _tail(out)))
-            if cask == "claude-code":
-                report.notes.append(
-                    "Claude Code стоит из Homebrew, каск claude-code — это канал stable, "
-                    "он отстаёт от свежих версий. Чаще обновляться: "
-                    "brew uninstall --cask claude-code && brew install --cask claude-code@latest"
-                )
+    async def run_step(index: int, label: str, cmd: list[str]) -> tuple[int, str]:
+        await _announce(progress, ProgressEvent(index, total, label, "", _since(started)))
+
+        async def on_line(line: str) -> None:
+            await _announce(progress, ProgressEvent(index, total, label, line, _since(started)))
+
+        return await _run(cmd, on_line=on_line if progress else None)
+
+    step = 1
+    code, out = await run_step(step, "claude update", [binary, "update"])
+    report.steps.append(Step("claude update", code == 0, _tail(out)))
+    if code != 0 and not cask and shutil.which("npm"):
+        code, out = await run_step(
+            step, "npm install -g claude-code", ["npm", "install", "-g", f"{CLI_PACKAGE}@latest"]
+        )
+        report.steps.append(Step("npm i -g claude-code@latest", code == 0, _tail(out)))
+    step += 1
+
+    if cask:
+        label = f"brew upgrade --cask {cask}"
+        code, out = await run_step(step, label, ["brew", "upgrade", "--cask", cask])
+        report.steps.append(Step(label, code == 0, _tail(out)))
+        if cask == "claude-code":
+            report.notes.append(
+                "Claude Code стоит из Homebrew, каск claude-code — это канал stable, "
+                "он отстаёт от свежих версий. Чаще обновляться: "
+                "brew uninstall --cask claude-code && brew install --cask claude-code@latest"
+            )
+        step += 1
 
     if with_sdk:
-        await _announce(progress, f"pip install -U {SDK_PACKAGE}")
-        code, out = await _run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", SDK_PACKAGE]
+        label = f"pip install -U {SDK_PACKAGE}"
+        code, out = await run_step(
+            step, label, [sys.executable, "-m", "pip", "install", "--upgrade", SDK_PACKAGE]
         )
-        report.steps.append(Step(f"pip install -U {SDK_PACKAGE}", code == 0, _tail(out)))
+        report.steps.append(Step(label, code == 0, _tail(out)))
+        step += 1
 
     report.cli_after = await cli_version(binary)
     report.sdk_after = sdk_version()
+    await _announce(progress, ProgressEvent(total + 1, total, "готово", "", _since(started)))
     return report
+
+
+def _since(started: float) -> float:
+    return time.monotonic() - started
 
 
 def _tail(output: str, lines: int = 2, width: int = 160) -> str:
