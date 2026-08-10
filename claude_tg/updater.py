@@ -31,6 +31,7 @@ class Step:
 @dataclass
 class UpdateReport:
     steps: list[Step] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
     cli_before: str = ""
     cli_after: str = ""
     sdk_before: str = ""
@@ -58,9 +59,15 @@ class UpdateReport:
             mark = "✅" if step.ok else "⚠️"
             detail = f" — {esc(step.detail)}" if step.detail else ""
             lines.append(f"{mark} {esc(step.name)}{detail}")
-        if self.changed:
+        for note in self.notes:
             lines.append("")
+            lines.append(f"ℹ️ {esc(note)}")
+
+        lines.append("")
+        if self.changed:
             lines.append("♻️ Версии изменились — перезапусти бота, чтобы подхватить их.")
+        else:
+            lines.append("Версии не изменились.")
         return "\n".join(lines)
 
 
@@ -113,6 +120,20 @@ async def latest_cli_version() -> str:
     return out.strip() if code == 0 else ""
 
 
+async def brew_cask_name() -> str | None:
+    """Каким каском Homebrew поставлен Claude Code, если поставлен им."""
+    if shutil.which("brew") is None:
+        return None
+    code, out = await _run(["brew", "list", "--cask"], timeout=120)
+    if code != 0:
+        return None
+    installed = set(out.split())
+    for name in ("claude-code@latest", "claude-code"):
+        if name in installed:
+            return name
+    return None
+
+
 async def run_update(cli_path: str | None = None, *, with_sdk: bool = True) -> UpdateReport:
     """Обновить CLI и SDK. Ошибки не бросаем — складываем в отчёт."""
     report = UpdateReport()
@@ -129,6 +150,20 @@ async def run_update(cli_path: str | None = None, *, with_sdk: bool = True) -> U
         if shutil.which("npm"):
             code, out = await _run(["npm", "install", "-g", f"{CLI_PACKAGE}@latest"])
             report.steps.append(Step("npm i -g claude-code@latest", code == 0, _tail(out)))
+
+    # Если Claude Code поставлен Homebrew, его версией распоряжается брю:
+    # `claude update` завершается успешно, но ничего не меняет.
+    if await cli_version(binary) == report.cli_before:
+        cask = await brew_cask_name()
+        if cask:
+            code, out = await _run(["brew", "upgrade", "--cask", cask])
+            report.steps.append(Step(f"brew upgrade --cask {cask}", code == 0, _tail(out)))
+            if cask == "claude-code":
+                report.notes.append(
+                    "Claude Code стоит из Homebrew, каск claude-code — это канал stable, "
+                    "он отстаёт от свежих версий. Чаще обновляться: "
+                    "brew uninstall --cask claude-code && brew install --cask claude-code@latest"
+                )
 
     if with_sdk:
         code, out = await _run(

@@ -35,6 +35,19 @@ def test_changed_detects_version_bump():
     assert sdk_only.changed is True
 
 
+def test_unchanged_versions_say_so_plainly():
+    text = UpdateReport(cli_before="2.1.205", cli_after="2.1.205").to_text()
+    assert "Версии не изменились" in text
+    assert "перезапусти" not in text
+
+
+def test_notes_are_rendered_and_escaped():
+    report = UpdateReport(notes=["каск claude-code & stable <канал>"])
+    text = report.to_text()
+    assert "ℹ️" in text
+    assert "&amp; stable &lt;канал&gt;" in text
+
+
 def test_missing_versions_render_as_question_mark():
     text = UpdateReport().to_text()
     assert "<code>?</code>" in text
