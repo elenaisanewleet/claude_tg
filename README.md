@@ -91,6 +91,15 @@ docker compose up -d
 * **macOS (launchd)**: `deploy/com.claude-tg.bot.plist` — замени `USERNAME`,
   положи в `~/Library/LaunchAgents/`, потом `launchctl load -w …`.
 
+### На сервере
+
+Отдельная инструкция — **[docs/deploy.md](docs/deploy.md)**: авторизация без
+браузера через `claude setup-token`, пошаговая установка на Ubuntu, Docker,
+диагностика. Там же — почему **Vercel и подобные serverless-платформы не
+подойдут** (боту нужен долгоживущий процесс, дочерний CLI и постоянный диск) и
+почему **сервер внутри России не заработает** (Anthropic не обслуживает
+регион).
+
 ---
 
 ## Доступ: бот только твой
