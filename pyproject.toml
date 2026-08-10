@@ -9,7 +9,7 @@ description = "Полноценный клиент Claude Code внутри Tele
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Elena Klochkova", email = "smm@semers.org" }]
+authors = [{ name = "Elena Klochkova (ByEll)", email = "smm@semers.org" }]
 dependencies = [
     "python-telegram-bot[job-queue,rate-limiter]>=22.0,<23",
     "claude-agent-sdk>=0.2.134",
