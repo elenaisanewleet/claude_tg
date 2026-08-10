@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import re
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
+RESTART_DELAY = 1.5  # даём ответу уйти до остановки процесса
 PROGRESS_INTERVAL = 2.0  # не чаще одной правки сообщения в 2 секунды
 PROGRESS_WIDTH = 12
 LINE_LIMIT = 120
@@ -76,6 +78,7 @@ OWNER_HELP = """
 /revoke &lt;user_id&gt; — закрыть доступ
 /block &lt;user_id&gt; — заблокировать молча
 /update — обновить Claude Code и SDK прямо сейчас
+/restart — перезапустить бота (подхватить обновление)
 """
 
 
@@ -175,6 +178,29 @@ async def _deliver(update: Update, message, text: str) -> None:
         except Exception:  # noqa: BLE001 — пробуем следующий способ
             continue
     log.error("Не смог доставить отчёт об обновлении: %s", plain[:300])
+
+
+@owner_only
+async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Перезапустить процесс — чтобы подхватить обновление, не подходя к маку.
+
+    Поднимает обратно супервизор: launchd с KeepAlive или systemd с
+    Restart=always. Запущенный вручную бот после этого просто остановится.
+    """
+    await reply(
+        update,
+        "♻️ Перезапускаюсь — вернусь через пару секунд.\n"
+        "Если бот запущен вручную из терминала, подними его сам: "
+        "<code>./.venv/bin/python -m claude_tg</code>",
+    )
+    context.application.create_task(_stop_soon(context.application))
+
+
+async def _stop_soon(application) -> None:
+    # Пауза, чтобы ответ успел уйти до закрытия соединения.
+    await asyncio.sleep(RESTART_DELAY)
+    log.info("Перезапуск по команде владельца")
+    application.stop_running()
 
 
 @owner_only

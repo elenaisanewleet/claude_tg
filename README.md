@@ -209,7 +209,7 @@ Claude развивается быстро, и бот намеренно не д
 `/version` · `/id` · `/help`
 
 **Владельцу**
-`/users` · `/grant <id>` · `/revoke <id>` · `/block <id>` · `/update`
+`/users` · `/grant <id>` · `/revoke <id>` · `/block <id>` · `/update` · `/restart`
 
 ---
 

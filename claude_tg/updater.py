@@ -102,7 +102,7 @@ class UpdateReport:
 
         lines.append("")
         if self.changed:
-            lines.append("♻️ Версии изменились — перезапусти бота, чтобы подхватить их.")
+            lines.append("♻️ Версии изменились. Чтобы подхватить их — /restart")
         else:
             lines.append("Версии не изменились.")
         return "\n".join(lines)

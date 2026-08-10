@@ -138,7 +138,7 @@ def test_changed_detects_version_bump():
 
     bumped = UpdateReport(cli_before="2.1.205", cli_after="2.1.226", sdk_before="1", sdk_after="1")
     assert bumped.changed is True
-    assert "перезапусти" in bumped.to_text()
+    assert "/restart" in bumped.to_text()
 
     sdk_only = UpdateReport(cli_before="2.1.205", cli_after="2.1.205", sdk_before="1", sdk_after="2")
     assert sdk_only.changed is True

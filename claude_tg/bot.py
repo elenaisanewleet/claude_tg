@@ -70,6 +70,7 @@ def _register(application: Application) -> None:
     application.add_handler(CommandHandler(["id"], admin.cmd_id))
     application.add_handler(CommandHandler(["version"], admin.cmd_version))
     application.add_handler(CommandHandler(["update"], admin.cmd_update))
+    application.add_handler(CommandHandler(["restart"], admin.cmd_restart))
     application.add_handler(CommandHandler(["users"], admin.cmd_users))
     application.add_handler(CommandHandler(["grant"], admin.cmd_grant))
     application.add_handler(CommandHandler(["revoke"], admin.cmd_revoke))
