@@ -104,8 +104,17 @@ async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     app = get_app(context)
     message = await reply(update, "🔄 Обновляю Claude Code и SDK…")
+
+    async def show_step(step: str) -> None:
+        """Показывать текущий шаг: brew может качать пакет несколько минут."""
+        if message is None:
+            return
+        await message.edit_text(
+            f"🔄 Обновляю…\n<code>{html.escape(step)}</code>", parse_mode=ParseMode.HTML
+        )
+
     try:
-        report = await updater.run_update(app.settings.claude_cli)
+        report = await updater.run_update(app.settings.claude_cli, progress=show_step)
         text = report.to_text()
     except Exception as exc:  # noqa: BLE001 — отчёт об ошибке полезнее молчания
         log.exception("Обновление не удалось")

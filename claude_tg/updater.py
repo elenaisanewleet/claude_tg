@@ -12,6 +12,7 @@ import html
 import logging
 import shutil
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
@@ -19,6 +20,19 @@ log = logging.getLogger(__name__)
 CLI_PACKAGE = "@anthropic-ai/claude-code"
 SDK_PACKAGE = "claude-agent-sdk"
 TIMEOUT = 600
+
+# Куда сообщать о текущем шаге (например, правкой сообщения в Telegram).
+Progress = Callable[[str], Awaitable[None]] | None
+
+
+async def _announce(progress: Progress, step: str) -> None:
+    """Сообщить о шаге. Не даём косметике уронить обновление."""
+    if progress is None:
+        return
+    try:
+        await progress(step)
+    except Exception:  # noqa: BLE001
+        log.debug("Не смог показать прогресс обновления", exc_info=True)
 
 
 @dataclass
@@ -134,20 +148,31 @@ async def brew_cask_name() -> str | None:
     return None
 
 
-async def run_update(cli_path: str | None = None, *, with_sdk: bool = True) -> UpdateReport:
-    """Обновить CLI и SDK. Ошибки не бросаем — складываем в отчёт."""
+async def run_update(
+    cli_path: str | None = None,
+    *,
+    with_sdk: bool = True,
+    progress: Progress = None,
+) -> UpdateReport:
+    """Обновить CLI и SDK. Ошибки не бросаем — складываем в отчёт.
+
+    `progress` вызывается перед каждым шагом: обновление занимает минуты, и без
+    этого непонятно, работает оно ещё или зависло.
+    """
     report = UpdateReport()
     binary = cli_path or shutil.which("claude") or "claude"
 
     report.cli_before = await cli_version(binary)
     report.sdk_before = sdk_version()
 
+    await _announce(progress, "claude update")
     code, out = await _run([binary, "update"])
     if code == 0:
         report.steps.append(Step("claude update", True, _tail(out)))
     else:
         report.steps.append(Step("claude update", False, _tail(out)))
         if shutil.which("npm"):
+            await _announce(progress, "npm install -g claude-code")
             code, out = await _run(["npm", "install", "-g", f"{CLI_PACKAGE}@latest"])
             report.steps.append(Step("npm i -g claude-code@latest", code == 0, _tail(out)))
 
@@ -156,6 +181,7 @@ async def run_update(cli_path: str | None = None, *, with_sdk: bool = True) -> U
     if await cli_version(binary) == report.cli_before:
         cask = await brew_cask_name()
         if cask:
+            await _announce(progress, f"brew upgrade --cask {cask}")
             code, out = await _run(["brew", "upgrade", "--cask", cask])
             report.steps.append(Step(f"brew upgrade --cask {cask}", code == 0, _tail(out)))
             if cask == "claude-code":
@@ -166,6 +192,7 @@ async def run_update(cli_path: str | None = None, *, with_sdk: bool = True) -> U
                 )
 
     if with_sdk:
+        await _announce(progress, f"pip install -U {SDK_PACKAGE}")
         code, out = await _run(
             [sys.executable, "-m", "pip", "install", "--upgrade", SDK_PACKAGE]
         )
