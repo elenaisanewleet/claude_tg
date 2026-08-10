@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 import shutil
 import sys
@@ -40,8 +41,14 @@ class UpdateReport:
         return self.cli_before != self.cli_after or self.sdk_before != self.sdk_after
 
     def to_text(self) -> str:
+        """HTML для Telegram. Всё, что пришло из вывода команд, экранируем:
+        там встречаются `<`, `>` и `&`, на которых Telegram отвергает сообщение."""
+
+        def esc(value: str) -> str:
+            return html.escape(value or "", quote=False)
+
         def arrow(before: str, after: str) -> str:
-            return f"<code>{before or '?'}</code> → <code>{after or '?'}</code>"
+            return f"<code>{esc(before) or '?'}</code> → <code>{esc(after) or '?'}</code>"
 
         lines = ["<b>Обновление компонентов</b>", ""]
         lines.append(f"Claude Code: {arrow(self.cli_before, self.cli_after)}")
@@ -49,8 +56,8 @@ class UpdateReport:
         lines.append("")
         for step in self.steps:
             mark = "✅" if step.ok else "⚠️"
-            detail = f" — {step.detail}" if step.detail else ""
-            lines.append(f"{mark} {step.name}{detail}")
+            detail = f" — {esc(step.detail)}" if step.detail else ""
+            lines.append(f"{mark} {esc(step.name)}{detail}")
         if self.changed:
             lines.append("")
             lines.append("♻️ Версии изменились — перезапусти бота, чтобы подхватить их.")

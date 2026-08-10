@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -14,6 +16,8 @@ from ..app import get_app
 from .common import guarded, owner_only, reply
 
 log = logging.getLogger(__name__)
+
+_TAG_RE = re.compile(r"<[^>]+>")
 
 HELP = """🤖 <b>Claude в Telegram</b>
 
@@ -100,15 +104,36 @@ async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     app = get_app(context)
     message = await reply(update, "🔄 Обновляю Claude Code и SDK…")
-    report = await updater.run_update(app.settings.claude_cli)
-    text = report.to_text()
+    try:
+        report = await updater.run_update(app.settings.claude_cli)
+        text = report.to_text()
+    except Exception as exc:  # noqa: BLE001 — отчёт об ошибке полезнее молчания
+        log.exception("Обновление не удалось")
+        text = f"⚠️ Обновление сорвалось: <code>{html.escape(str(exc))[:400]}</code>"
+    await _deliver(update, message, text)
+
+
+async def _deliver(update: Update, message, text: str) -> None:
+    """Показать отчёт, не потеряв его из-за разметки.
+
+    Вывод команд может содержать что угодно, поэтому если Telegram не принял
+    HTML — отправляем то же самое без тегов, а не «что-то пошло не так».
+    """
+    plain = _TAG_RE.sub("", text)
+    attempts = []
     if message is not None:
+        attempts.append(lambda: message.edit_text(text, parse_mode=ParseMode.HTML))
+        attempts.append(lambda: message.edit_text(plain))
+    attempts.append(lambda: reply(update, text))
+    attempts.append(lambda: reply(update, plain, parse_mode=None))
+
+    for attempt in attempts:
         try:
-            await message.edit_text(text, parse_mode=ParseMode.HTML)
+            await attempt()
             return
-        except Exception:  # noqa: BLE001
-            log.debug("Не смог отредактировать отчёт", exc_info=True)
-    await reply(update, text)
+        except Exception:  # noqa: BLE001 — пробуем следующий способ
+            continue
+    log.error("Не смог доставить отчёт об обновлении: %s", plain[:300])
 
 
 @owner_only
