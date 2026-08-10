@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-tg"
+version = "0.1.0"
+description = "Полноценный клиент Claude Code внутри Telegram: сессии, модели, effort, режимы"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "python-telegram-bot[job-queue,rate-limiter]>=22.0,<23",
+    "claude-agent-sdk>=0.2.134",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6"]
+
+[project.scripts]
+claude-tg = "claude_tg.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["claude_tg*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

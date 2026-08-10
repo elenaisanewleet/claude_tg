@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS: запуск бота как фонового сервиса.
+  1. Положи файл в ~/Library/LaunchAgents/com.claude-tg.bot.plist
+  2. Замени /Users/USERNAME на свой домашний каталог
+  3. launchctl load -w ~/Library/LaunchAgents/com.claude-tg.bot.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claude-tg.bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USERNAME/claude-tg/.venv/bin/python</string>
+        <string>-m</string>
+        <string>claude_tg</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/claude-tg</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/claude-tg.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/claude-tg.err.log</string>
+</dict>
+</plist>

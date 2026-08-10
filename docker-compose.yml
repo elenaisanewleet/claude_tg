@@ -1,0 +1,18 @@
+services:
+  claude-tg:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # В контейнере CLI обновляем пересборкой образа, а не на лету.
+      AUTO_UPDATE: "false"
+    volumes:
+      # Данные бота: БД и рабочие папки сессий.
+      - claude-tg-data:/data
+      # Логин Claude Code. Сначала выполни на хосте:
+      #   docker compose run --rm claude-tg claude auth login
+      - claude-tg-auth:/root/.claude
+
+volumes:
+  claude-tg-data:
+  claude-tg-auth:

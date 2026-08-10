@@ -1,0 +1,21 @@
+[Unit]
+Description=claude-tg — Claude Code в Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Подставь своего пользователя и пути
+User=%i
+WorkingDirectory=/opt/claude-tg
+EnvironmentFile=/opt/claude-tg/.env
+ExecStart=/opt/claude-tg/.venv/bin/python -m claude_tg
+Restart=always
+RestartSec=5
+# Автообновление CLI внутри бота роняет процесс только при смене версии —
+# Restart=always поднимет его уже на новой.
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
