@@ -7,6 +7,7 @@ import logging
 
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
+from telegram.error import Conflict, NetworkError
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -179,7 +180,25 @@ async def _auto_update_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    log.exception("Необработанная ошибка при обработке апдейта", exc_info=context.error)
+    error = context.error
+
+    # Один и тот же токен слушают два процесса. Telegram оставляет только
+    # последний, а остальные получают Conflict на каждом опросе — трассировка
+    # тут ничего не объясняет, нужен понятный совет.
+    if isinstance(error, Conflict):
+        log.error(
+            "Этот же токен слушает другой запущенный экземпляр бота — Telegram "
+            "разрешает только один. Проверь: ./deploy/autostart-macos.sh --status "
+            "и pgrep -fl claude_tg, оставь что-то одно."
+        )
+        return
+
+    # Пропал интернет или моргнул Telegram: библиотека сама повторит запрос.
+    if isinstance(error, NetworkError):
+        log.warning("Сеть недоступна, повторю: %s", error)
+        return
+
+    log.exception("Необработанная ошибка при обработке апдейта", exc_info=error)
     if not isinstance(update, Update):
         return
     message = update.effective_message

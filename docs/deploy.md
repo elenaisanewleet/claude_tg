@@ -198,6 +198,7 @@ docker compose logs -f
 | В логах `CLI \`claude\` не найден` | Не установлен Claude Code либо он не в `PATH` у пользователя сервиса. Поставь `npm i -g @anthropic-ai/claude-code` или пропиши `CLAUDE_CLI_PATH` в `.env` |
 | Бот отвечает «Не смог запустить Claude» | Скорее всего авторизация. Проверь `CLAUDE_CODE_OAUTH_TOKEN` и что токен не отозван: на сервере `claude --version`, затем `echo привет \| claude -p` |
 | Ошибки про регион / отказ в доступе | Сервер внутри РФ или IP из неподдерживаемого региона. Нужна машина в Европе |
+| В логе `Conflict: terminated by other getUpdates request` | Один токен слушают два процесса — обычно фоновый из автозапуска и запущенный руками. Telegram оставляет только последний. Проверь `./deploy/autostart-macos.sh --status` и `pgrep -fl claude_tg`, оставь что-то одно |
 | Бот молчит на сообщения в группе | Так и задумано: в группах он отвечает только на упоминание `@бот` или реплай |
 | Процесс убивает OOM | Мало памяти. Возьми тариф с 1 ГБ или добавь swap: `fallocate -l 2G /swapfile && mkswap /swapfile && swapon /swapfile` |
 
