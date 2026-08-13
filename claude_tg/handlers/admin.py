@@ -294,12 +294,18 @@ async def cmd_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _known_users(app) -> list[tuple[int, str]]:
-    """Владелец, пущенные через .env и одобренные — в одном списке."""
+    """Владелец, пущенные через .env, одобренные и все, у кого есть расход.
+
+    Последнее важно: доступ могли отозвать после того, как человек уже потратил,
+    и без этого его расход просто исчезал бы из отчёта.
+    """
     seen: dict[int, str] = {app.settings.owner_id: f"Владелец · <code>{app.settings.owner_id}</code>"}
     for user_id in sorted(app.settings.allowed_user_ids - {app.settings.owner_id}):
         seen[user_id] = f"Из .env · <code>{user_id}</code>"
     for record in await app.access.approved_users():
         seen.setdefault(record.user_id, describe_user(record))
+    for user_id in sorted(await app.spenders()):
+        seen.setdefault(user_id, f"Без доступа · <code>{user_id}</code>")
     return list(seen.items())
 
 

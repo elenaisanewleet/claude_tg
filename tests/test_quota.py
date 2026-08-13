@@ -136,3 +136,43 @@ def test_quota_formatting_is_readable():
 
     hourly = Quota(limit=1.0, spent=0.0, window_hours=5)
     assert "5 ч." in hourly.describe()
+
+
+async def test_spender_without_access_is_still_visible(app):
+    """Доступ отозвали, а расход остался — в отчёте он обязан быть виден."""
+    await app.record_turn(GUEST, 3.0, "opus")
+    assert GUEST in await app.spenders()
+
+    await app.access.revoke(GUEST)
+    assert GUEST not in {r.user_id for r in await app.access.approved_users()}
+    assert GUEST in await app.spenders()
+
+
+async def test_spenders_ignores_usage_outside_window(app):
+    long_ago = int(time.time()) - 200 * 3600  # окно 168 часов
+    app.storage.conn.execute(
+        "INSERT INTO usage (user_id, at, cost_usd, model) VALUES (?, ?, ?, ?)",
+        (GUEST, long_ago, 9.0, "opus"),
+    )
+    app.storage.conn.commit()
+    assert GUEST not in await app.spenders()
+
+
+def test_user_names_are_escaped_for_html():
+    """Имя задаёт сам человек, а мы шлём его с parse_mode=HTML."""
+    from claude_tg.access import describe_user
+    from claude_tg.storage import UserRecord
+
+    record = UserRecord(
+        user_id=555,
+        username="m&m",
+        full_name="Аня <3",
+        status="approved",
+        requested_at=0,
+        decided_at=0,
+        note=None,
+    )
+    text = describe_user(record)
+    assert "&lt;3" in text
+    assert "m&amp;m" in text
+    assert "<3" not in text

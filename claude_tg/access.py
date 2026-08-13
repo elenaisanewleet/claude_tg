@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 from dataclasses import dataclass
 
@@ -77,7 +78,11 @@ class AccessControl:
 
 
 def describe_user(user: User | UserRecord) -> str:
-    """`Имя (@username, id)` — одинаково для telegram.User и записи из БД."""
+    """`Имя (@username, id)` — одинаково для telegram.User и записи из БД.
+
+    Имя и username человек задаёт сам, а все места вывода — с parse_mode=HTML,
+    поэтому экранируем здесь: иначе «Аня <3» роняет отправку целого сообщения.
+    """
     if isinstance(user, UserRecord):
         name = user.full_name or "—"
         username = user.username
@@ -86,5 +91,5 @@ def describe_user(user: User | UserRecord) -> str:
         name = user.full_name
         username = user.username
         uid = user.id
-    handle = f"@{username}" if username else "без username"
-    return f"{name} ({handle}, id {uid})"
+    handle = f"@{html.escape(username)}" if username else "без username"
+    return f"{html.escape(name)} ({handle}, id {uid})"

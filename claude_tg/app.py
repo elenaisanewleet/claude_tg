@@ -156,8 +156,12 @@ class AppContext:
 
     # --- лимиты расхода -----------------------------------------------------
 
-    def _window_start(self) -> int:
+    def window_start(self) -> int:
         return int(time.time()) - self.settings.budget_window_hours * 3600
+
+    async def spenders(self) -> set[int]:
+        """Все, у кого есть расход в окне, — включая потерявших доступ."""
+        return set(await self.storage.spending_by_user(self.window_start()))
 
     async def quota_for(self, user_id: int) -> Quota:
         """Сколько человеку осталось. Владелец по умолчанию без ограничений."""
@@ -165,7 +169,7 @@ class AppContext:
         if not explicit:
             budget = None if self.access.is_owner(user_id) else self.settings.default_budget_usd
 
-        since = self._window_start()
+        since = self.window_start()
         spent = await self.storage.spent_since(user_id, since)
         frees_up_in: int | None = None
         if budget is not None and spent >= budget:
