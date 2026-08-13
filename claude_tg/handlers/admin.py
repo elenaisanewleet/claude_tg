@@ -79,6 +79,8 @@ OWNER_HELP = """
 /block &lt;user_id&gt; — заблокировать молча
 /update — обновить Claude Code и SDK прямо сейчас
 /restart — перезапустить бота (подхватить обновление)
+/limits — кто сколько израсходовал и у кого какой потолок
+/limit &lt;user_id&gt; &lt;сумма|нет|сброс&gt; — поменять потолок
 """
 
 
@@ -222,6 +224,83 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         for user in pending:
             lines.append(f"• {describe_user(user)} — /grant {user.user_id}")
     await reply(update, "\n".join(lines))
+
+
+@owner_only
+async def cmd_limits(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кто сколько израсходовал за окно и какой у кого потолок."""
+    app = get_app(context)
+    lines = ["💰 <b>Расход и лимиты</b>", ""]
+
+    for user_id, title in await _known_users(app):
+        quota = await app.quota_for(user_id)
+        mark = "♾" if quota.unlimited else ("🚫" if not quota.allowed else "✅")
+        lines.append(f"{mark} {title}\n   {quota.describe()}")
+
+    default = app.settings.default_budget_usd
+    window = app.settings.budget_window_hours // 24
+    lines.append("")
+    lines.append(f"По умолчанию новым: ${default:.2f} за {window} дн.")
+    lines.append(
+        "Изменить: <code>/limit &lt;user_id&gt; 20</code> · "
+        "снять: <code>/limit &lt;user_id&gt; нет</code> · "
+        "вернуть к умолчанию: <code>/limit &lt;user_id&gt; сброс</code>"
+    )
+    await reply(update, "\n".join(lines))
+
+
+@owner_only
+async def cmd_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/limit <user_id> <сумма|нет|сброс>` — потолок расхода за окно."""
+    app = get_app(context)
+    if len(context.args or []) < 2:
+        await cmd_limits(update, context)
+        return
+
+    user_id = _parse_user_id(context)
+    if user_id is None:
+        await reply(update, "Первым аргументом нужен user_id: <code>/limit 12345 20</code>")
+        return
+
+    raw = context.args[1].strip().lower().replace(",", ".").lstrip("$")
+    if raw in {"нет", "no", "off", "без", "unlimited", "∞"}:
+        await app.set_budget(user_id, None)
+        await reply(update, f"♾ Снял ограничение для <code>{user_id}</code>")
+        return
+    if raw in {"сброс", "reset", "default", "умолчание"}:
+        await app.reset_budget(user_id)
+        quota = await app.quota_for(user_id)
+        await reply(update, f"↩️ Вернул умолчание для <code>{user_id}</code>: {quota.describe()}")
+        return
+
+    try:
+        budget = float(raw)
+    except ValueError:
+        await reply(update, f"Не понял сумму: <code>{context.args[1]}</code>")
+        return
+    if budget < 0:
+        await reply(update, "Сумма не может быть отрицательной.")
+        return
+
+    await app.set_budget(user_id, budget)
+    quota = await app.quota_for(user_id)
+    await reply(update, f"💰 Лимит для <code>{user_id}</code>: {quota.describe()}")
+    if not app.access.is_owner(user_id):
+        await _notify_user(
+            context,
+            user_id,
+            f"💰 Владелец обновил твой лимит: ${budget:.2f} за {quota.period}",
+        )
+
+
+async def _known_users(app) -> list[tuple[int, str]]:
+    """Владелец, пущенные через .env и одобренные — в одном списке."""
+    seen: dict[int, str] = {app.settings.owner_id: f"Владелец · <code>{app.settings.owner_id}</code>"}
+    for user_id in sorted(app.settings.allowed_user_ids - {app.settings.owner_id}):
+        seen[user_id] = f"Из .env · <code>{user_id}</code>"
+    for record in await app.access.approved_users():
+        seen.setdefault(record.user_id, describe_user(record))
+    return list(seen.items())
 
 
 @owner_only

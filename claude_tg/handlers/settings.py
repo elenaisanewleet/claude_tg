@@ -183,8 +183,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             from .sessions import status_text
 
             session = app.sessions.peek(chat_key)
+            user = update.effective_user
             await query.edit_message_text(
-                await status_text(app, chat_key, session),
+                await status_text(app, chat_key, session, user.id if user else None),
                 parse_mode=ParseMode.HTML,
                 reply_markup=ui.main_menu(prefs),
             )

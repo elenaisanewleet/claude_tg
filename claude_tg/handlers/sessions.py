@@ -22,10 +22,18 @@ log = logging.getLogger(__name__)
 SESSION_LIST_LIMIT = 10
 
 
-async def status_text(app: AppContext, chat_key: str, session: ClaudeSession | None) -> str:
+async def status_text(
+    app: AppContext,
+    chat_key: str,
+    session: ClaudeSession | None,
+    user_id: int | None = None,
+) -> str:
     prefs = await app.prefs_for(chat_key)
     stored = await app.storage.get_chat_session(chat_key)
     lines = ["📊 <b>Статус сессии</b>", ""]
+    if user_id is not None:
+        quota = await app.quota_for(user_id)
+        lines.append(f"💰 Расход: {quota.describe()}")
     lines.append(f"🧠 {catalog.model_emoji(prefs.model)} <code>{prefs.model}</code> · ⚡ {prefs.effort}")
     lines.append(f"🎛 {catalog.label('mode', prefs.permission_mode)}")
     if stored and stored.session_id:
@@ -68,7 +76,13 @@ def _bar(fraction: float, width: int = 10) -> str:
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     app = get_app(context)
     chat_key, _ = context_of(update)
-    await reply(update, await status_text(app, chat_key, app.sessions.peek(chat_key)))
+    user = update.effective_user
+    await reply(
+        update,
+        await status_text(
+            app, chat_key, app.sessions.peek(chat_key), user.id if user else None
+        ),
+    )
 
 
 @guarded

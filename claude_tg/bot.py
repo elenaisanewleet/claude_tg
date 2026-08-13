@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
@@ -75,6 +76,8 @@ def _register(application: Application) -> None:
     application.add_handler(CommandHandler(["grant"], admin.cmd_grant))
     application.add_handler(CommandHandler(["revoke"], admin.cmd_revoke))
     application.add_handler(CommandHandler(["block"], admin.cmd_block))
+    application.add_handler(CommandHandler(["limits"], admin.cmd_limits))
+    application.add_handler(CommandHandler(["limit"], admin.cmd_limit))
 
     application.add_handler(CommandHandler(["settings"], settings_handlers.cmd_settings))
     application.add_handler(CommandHandler(["model"], settings_handlers.cmd_model))
@@ -141,6 +144,9 @@ async def _post_init(application: Application) -> None:
             name="claude-tg-autoupdate",
         )
         log.info("Автообновление включено: каждый день в %02d:17", settings.auto_update_hour)
+
+    # Окно расхода скользящее — записи старше двух окон уже ни на что не влияют.
+    await storage.prune_usage(int(time.time()) - settings.budget_window_hours * 7200)
 
     cli = await updater.cli_version(settings.claude_cli)
     log.info(

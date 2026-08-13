@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,63 @@ from .ui import permission_menu
 log = logging.getLogger(__name__)
 
 BOT_DATA_KEY = "claude_tg_app"
+
+
+@dataclass
+class Quota:
+    """Сколько человек израсходовал в скользящем окне и сколько ему можно."""
+
+    limit: float | None  # None — без ограничений
+    spent: float
+    window_hours: int
+    frees_up_in: int | None = None  # секунд до выхода самого раннего хода из окна
+
+    @property
+    def unlimited(self) -> bool:
+        return self.limit is None
+
+    @property
+    def allowed(self) -> bool:
+        return self.unlimited or self.spent < self.limit
+
+    @property
+    def left(self) -> float:
+        return 0.0 if self.unlimited else max(0.0, self.limit - self.spent)
+
+    @property
+    def fraction(self) -> float:
+        if self.unlimited or not self.limit:
+            return 0.0
+        return min(1.0, self.spent / self.limit)
+
+    @property
+    def period(self) -> str:
+        days = self.window_hours // 24
+        return f"{days} дн." if days else f"{self.window_hours} ч."
+
+    def describe(self) -> str:
+        if self.unlimited:
+            return f"без ограничений · израсходовано ${self.spent:.2f} за {self.period}"
+        return (
+            f"${self.spent:.2f} из ${self.limit:.2f} за {self.period} "
+            f"({self.fraction:.0%}), осталось ${self.left:.2f}"
+        )
+
+    def refusal(self) -> str:
+        text = (
+            f"🚦 Лимит исчерпан: израсходовано ${self.spent:.2f} "
+            f"из ${self.limit:.2f} за {self.period}."
+        )
+        if self.frees_up_in:
+            hours = self.frees_up_in // 3600
+            if hours >= 24:
+                text += f"\nЧасть лимита освободится примерно через {hours // 24} дн."
+            elif hours >= 1:
+                text += f"\nЧасть лимита освободится примерно через {hours} ч."
+            else:
+                text += "\nЧасть лимита освободится в течение часа."
+        text += "\n\nЕсли нужно больше — попроси владельца бота поднять лимит."
+        return text
 
 
 @dataclass
@@ -95,6 +153,44 @@ class AppContext:
 
     def set_target(self, chat_key: str, chat_id: int, thread_id: int | None) -> None:
         self.targets[chat_key] = (chat_id, thread_id)
+
+    # --- лимиты расхода -----------------------------------------------------
+
+    def _window_start(self) -> int:
+        return int(time.time()) - self.settings.budget_window_hours * 3600
+
+    async def quota_for(self, user_id: int) -> Quota:
+        """Сколько человеку осталось. Владелец по умолчанию без ограничений."""
+        explicit, budget = await self.storage.get_limit(user_id)
+        if not explicit:
+            budget = None if self.access.is_owner(user_id) else self.settings.default_budget_usd
+
+        since = self._window_start()
+        spent = await self.storage.spent_since(user_id, since)
+        frees_up_in: int | None = None
+        if budget is not None and spent >= budget:
+            oldest = await self.storage.oldest_usage_at(user_id, since)
+            if oldest is not None:
+                window = self.settings.budget_window_hours * 3600
+                frees_up_in = max(0, oldest + window - int(time.time()))
+
+        return Quota(
+            limit=budget,
+            spent=spent,
+            window_hours=self.settings.budget_window_hours,
+            frees_up_in=frees_up_in,
+        )
+
+    async def record_turn(self, user_id: int, cost_usd: float, model: str | None) -> None:
+        if cost_usd <= 0:
+            return
+        await self.storage.record_usage(user_id, cost_usd, model)
+
+    async def set_budget(self, user_id: int, budget_usd: float | None) -> None:
+        await self.storage.set_limit(user_id, budget_usd)
+
+    async def reset_budget(self, user_id: int) -> None:
+        await self.storage.clear_limit(user_id)
 
     # --- разрешения инструментов -------------------------------------------
 

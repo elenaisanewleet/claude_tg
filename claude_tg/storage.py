@@ -43,6 +43,25 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- Расход по каждому ходу. Стоимость — по публичному прайсу: подписка так не
+-- тарифицируется, но это честная мера «кто сколько съел», учитывающая и
+-- модель, и длину контекста.
+CREATE TABLE IF NOT EXISTS usage (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id  INTEGER NOT NULL,
+    at       INTEGER NOT NULL,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    model    TEXT
+);
+CREATE INDEX IF NOT EXISTS usage_user_at ON usage (user_id, at);
+
+-- Персональный потолок. Нет строки — действует значение по умолчанию,
+-- строка с NULL в budget_usd — без ограничений.
+CREATE TABLE IF NOT EXISTS limits (
+    user_id    INTEGER PRIMARY KEY,
+    budget_usd REAL
+);
 """
 
 
@@ -273,6 +292,104 @@ class Storage:
             self.conn.commit()
 
         await self._run(_do)
+
+    # --- расход и лимиты ----------------------------------------------------
+
+    async def record_usage(self, user_id: int, cost_usd: float, model: str | None) -> None:
+        def _do() -> None:
+            self.conn.execute(
+                "INSERT INTO usage (user_id, at, cost_usd, model) VALUES (?, ?, ?, ?)",
+                (user_id, int(time.time()), float(cost_usd), model),
+            )
+            self.conn.commit()
+
+        await self._run(_do)
+
+    async def spent_since(self, user_id: int, since: int) -> float:
+        def _do() -> float:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM usage "
+                "WHERE user_id = ? AND at >= ?",
+                (user_id, since),
+            ).fetchone()
+            return float(row["total"] or 0.0)
+
+        return await self._run(_do)
+
+    async def oldest_usage_at(self, user_id: int, since: int) -> int | None:
+        """Когда был самый ранний ход в окне — по нему считаем, когда отпустит."""
+
+        def _do() -> int | None:
+            row = self.conn.execute(
+                "SELECT MIN(at) AS first FROM usage WHERE user_id = ? AND at >= ? AND cost_usd > 0",
+                (user_id, since),
+            ).fetchone()
+            return int(row["first"]) if row and row["first"] is not None else None
+
+        return await self._run(_do)
+
+    async def spending_by_user(self, since: int) -> dict[int, float]:
+        def _do() -> dict[int, float]:
+            rows = self.conn.execute(
+                "SELECT user_id, SUM(cost_usd) AS total FROM usage WHERE at >= ? GROUP BY user_id",
+                (since,),
+            ).fetchall()
+            return {int(r["user_id"]): float(r["total"] or 0.0) for r in rows}
+
+        return await self._run(_do)
+
+    async def prune_usage(self, before: int) -> None:
+        """Старые записи не нужны: окно скользящее, история только копится."""
+
+        def _do() -> None:
+            self.conn.execute("DELETE FROM usage WHERE at < ?", (before,))
+            self.conn.commit()
+
+        await self._run(_do)
+
+    async def get_limit(self, user_id: int) -> tuple[bool, float | None]:
+        """(задан ли явно, значение). NULL в значении — без ограничений."""
+
+        def _do() -> tuple[bool, float | None]:
+            row = self.conn.execute(
+                "SELECT budget_usd FROM limits WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if row is None:
+                return False, None
+            value = row["budget_usd"]
+            return True, (float(value) if value is not None else None)
+
+        return await self._run(_do)
+
+    async def set_limit(self, user_id: int, budget_usd: float | None) -> None:
+        def _do() -> None:
+            self.conn.execute(
+                "INSERT INTO limits (user_id, budget_usd) VALUES (?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET budget_usd = excluded.budget_usd",
+                (user_id, budget_usd),
+            )
+            self.conn.commit()
+
+        await self._run(_do)
+
+    async def clear_limit(self, user_id: int) -> None:
+        """Вернуть пользователя к значению по умолчанию."""
+
+        def _do() -> None:
+            self.conn.execute("DELETE FROM limits WHERE user_id = ?", (user_id,))
+            self.conn.commit()
+
+        await self._run(_do)
+
+    async def all_limits(self) -> dict[int, float | None]:
+        def _do() -> dict[int, float | None]:
+            rows = self.conn.execute("SELECT user_id, budget_usd FROM limits").fetchall()
+            return {
+                int(r["user_id"]): (float(r["budget_usd"]) if r["budget_usd"] is not None else None)
+                for r in rows
+            }
+
+        return await self._run(_do)
 
     # --- служебный key-value ------------------------------------------------
 

@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from telegram import Update
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
+from ..access import describe_user
 from ..app import get_app
 from ..bridge import ClaudeSession
 from ..streamer import TelegramStreamer
@@ -37,6 +38,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     app = get_app(context)
     chat_key, thread_id = context_of(update)
+
+    quota = await app.quota_for(user.id)
+    if not quota.allowed:
+        await reply(update, quota.refusal())
+        await _tell_owner_about_limit(context, user, quota)
+        return
 
     try:
         session = await app.session_for(chat_key, user.id)
@@ -85,13 +92,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
     before = _snapshot_outbox(session.workspace)
     await streamer.start()
+    result = None
     try:
-        await session.ask(prompt, streamer)
+        result = await session.ask(prompt, streamer)
     except Exception as exc:  # noqa: BLE001 — не роняем бота из-за одного хода
         log.exception("Ход завершился исключением")
         await streamer.on_error(f"⚠️ Сбой: <code>{truncate(str(exc), 300)}</code>")
     finally:
         await streamer.finish()
+
+    if result is not None and result.total_cost_usd:
+        await app.record_turn(user.id, result.total_cost_usd, prefs.model)
 
     await app.remember_session(chat_key, session, user.id)
     await _deliver_outbox(update, context, session, before)
@@ -160,6 +171,25 @@ async def _save_attachments(
             await reply(update, f"⚠️ Не удалось скачать «{name}».")
 
     return saved
+
+
+async def _tell_owner_about_limit(context: ContextTypes.DEFAULT_TYPE, user, quota) -> None:
+    """Владелец должен узнать, что человек упёрся, — иначе тот просто пропадёт."""
+    app = get_app(context)
+    if app.access.is_owner(user.id):
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=app.settings.owner_id,
+            text=(
+                f"🚦 {describe_user(user)} упёрся в лимит: {quota.describe()}\n"
+                f"Поднять: <code>/limit {user.id} 20</code>, снять: "
+                f"<code>/limit {user.id} нет</code>"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception:  # noqa: BLE001 — уведомление не критично
+        log.debug("Не смог сообщить владельцу об упёршемся лимите", exc_info=True)
 
 
 def _addressed_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:

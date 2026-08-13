@@ -67,6 +67,9 @@ class Settings:
     auto_update: bool
     auto_update_hour: int
 
+    default_budget_usd: float
+    budget_window_hours: int
+
     log_level: str
 
     @classmethod
@@ -123,6 +126,8 @@ class Settings:
             turn_timeout=int(src.get("TURN_TIMEOUT") or 3600),
             auto_update=_bool(src.get("AUTO_UPDATE"), True),
             auto_update_hour=int(src.get("AUTO_UPDATE_HOUR") or 5),
+            default_budget_usd=float(src.get("DEFAULT_BUDGET_USD") or 5.0),
+            budget_window_hours=int(src.get("BUDGET_WINDOW_HOURS") or 168),
             log_level=(src.get("LOG_LEVEL") or "INFO").strip().upper(),
         )
 
