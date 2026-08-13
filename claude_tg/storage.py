@@ -201,6 +201,20 @@ class Storage:
 
         return await self._run(_do)
 
+    async def update_identity(
+        self, user_id: int, username: str | None, full_name: str | None
+    ) -> None:
+        """Освежить имя уже известного человека, не трогая его статус."""
+
+        def _do() -> None:
+            self.conn.execute(
+                "UPDATE users SET username = ?, full_name = ? WHERE user_id = ?",
+                (username, full_name, user_id),
+            )
+            self.conn.commit()
+
+        await self._run(_do)
+
     async def set_status(self, user_id: int, status: str) -> None:
         def _do() -> None:
             self.conn.execute(

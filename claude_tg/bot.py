@@ -95,6 +95,7 @@ def _register(application: Application) -> None:
 
     application.add_handler(CallbackQueryHandler(permissions.on_permission_callback, pattern=r"^perm:"))
     application.add_handler(CallbackQueryHandler(admin.on_access_callback, pattern=r"^acc:"))
+    application.add_handler(CallbackQueryHandler(admin.on_limit_callback, pattern=r"^lim:"))
     application.add_handler(CallbackQueryHandler(sessions.on_session_callback, pattern=r"^(sess|sres):"))
     application.add_handler(
         CallbackQueryHandler(settings_handlers.on_callback, pattern=r"^(menu|set|tgl):")

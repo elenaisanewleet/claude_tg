@@ -68,6 +68,12 @@ class Quota:
             f"({self.fraction:.0%}), осталось ${self.left:.2f}"
         )
 
+    def short(self) -> str:
+        """Совсем коротко — помещается на кнопку рядом с именем."""
+        if self.unlimited:
+            return f"${self.spent:.2f} · без лимита"
+        return f"${self.spent:.2f} из ${self.limit:.2f}"
+
     def refusal(self) -> str:
         text = (
             f"🚦 Лимит исчерпан: израсходовано ${self.spent:.2f} "

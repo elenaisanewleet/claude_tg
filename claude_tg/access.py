@@ -41,6 +41,8 @@ class AccessControl:
             return AccessDecision(allowed=True, status=STATUS_APPROVED)
 
         record = await self.storage.get_user(user.id)
+        if record is not None:
+            await self._remember_name(user, record)
         if record and record.status == STATUS_APPROVED:
             return AccessDecision(allowed=True, status=STATUS_APPROVED)
         if record and record.status == STATUS_BLOCKED:
@@ -52,6 +54,16 @@ class AccessControl:
             user.id, user.username, user.full_name, STATUS_PENDING
         )
         return AccessDecision(allowed=False, status=STATUS_PENDING, just_requested=True)
+
+    async def _remember_name(self, user: User, record: UserRecord) -> None:
+        """Доступ выдают и по голому user_id — тогда имени в базе нет вовсе.
+
+        Раньше оно так и оставалось пустым навсегда: одобренный человек уходит
+        из `check` до записи, и в списках висел безымянный «— (id 12345)».
+        """
+        if record.username == user.username and record.full_name == user.full_name:
+            return
+        await self.storage.update_identity(user.id, user.username, user.full_name)
 
     async def approve(self, user_id: int) -> None:
         record = await self.storage.get_user(user_id)
@@ -93,3 +105,18 @@ def describe_user(user: User | UserRecord) -> str:
         uid = user.id
     handle = f"@{html.escape(username)}" if username else "без username"
     return f"{html.escape(name)} ({handle}, id {uid})"
+
+
+def user_title(user: User | UserRecord) -> str:
+    """Короткая подпись для кнопки — обычный текст, без HTML.
+
+    Внутри InlineKeyboardButton разметка не разбирается: экранированное имя
+    показалось бы буквально как «Аня &lt;3».
+    """
+    if isinstance(user, UserRecord):
+        name, username, uid = user.full_name, user.username, user.user_id
+    else:
+        name, username, uid = user.full_name, user.username, user.id
+    if name:
+        return name
+    return f"@{username}" if username else f"id {uid}"

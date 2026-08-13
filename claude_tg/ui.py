@@ -7,6 +7,11 @@
     perm:<request_id>:<decision>  — ответ на запрос разрешения инструмента
     acc:<user_id>:<decision>      — решение владельца по заявке на доступ
     sess:<action>                 — действия с сессией
+    lim:list                      — список людей с их расходом
+    lim:u:<user_id>               — карточка одного человека
+    lim:set:<user_id>:<usd>       — поставить потолок
+    lim:off:<user_id>             — снять ограничение
+    lim:def:<user_id>             — вернуть значение по умолчанию
 """
 
 from __future__ import annotations
@@ -130,6 +135,50 @@ def access_menu(user_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+LIMIT_PRESETS = (5, 10, 20, 50)
+BUTTON_LABEL_LIMIT = 24
+
+
+def _clip(label: str, limit: int = BUTTON_LABEL_LIMIT) -> str:
+    return label if len(label) <= limit else label[: limit - 1] + "…"
+
+
+def limits_menu(entries: list[tuple[int, str, str]]) -> InlineKeyboardMarkup:
+    """Список людей: один человек — одна кнопка, `(user_id, метка, расход)`."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    f"{_clip(label)} · {spent}", callback_data=f"lim:u:{user_id}"
+                )
+            ]
+            for user_id, label, spent in entries
+        ]
+    )
+
+
+def limit_card(user_id: int, unlimited: bool, limit: float | None) -> InlineKeyboardMarkup:
+    """Карточка одного человека: готовые суммы, снять лимит, вернуть умолчание."""
+    presets = [
+        InlineKeyboardButton(
+            _mark(not unlimited and limit == float(usd), f"${usd}"),
+            callback_data=f"lim:set:{user_id}:{usd}",
+        )
+        for usd in LIMIT_PRESETS
+    ]
+    rows = _rows(presets, 4)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                _mark(unlimited, "♾ Без лимита"), callback_data=f"lim:off:{user_id}"
+            ),
+            InlineKeyboardButton("↩️ Умолчание", callback_data=f"lim:def:{user_id}"),
+        ]
+    )
+    rows.append([InlineKeyboardButton("⬅️ К списку", callback_data="lim:list")])
+    return InlineKeyboardMarkup(rows)
 
 
 def sessions_menu(has_session: bool) -> InlineKeyboardMarkup:

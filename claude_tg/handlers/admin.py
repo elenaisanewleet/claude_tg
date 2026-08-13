@@ -8,12 +8,12 @@ import logging
 import re
 import time
 
-from telegram import Update
+from telegram import InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from .. import updater
-from ..access import describe_user
+from .. import ui, updater
+from ..access import describe_user, user_title
 from ..app import get_app
 from .common import guarded, owner_only, reply
 
@@ -79,8 +79,8 @@ OWNER_HELP = """
 /block &lt;user_id&gt; — заблокировать молча
 /update — обновить Claude Code и SDK прямо сейчас
 /restart — перезапустить бота (подхватить обновление)
-/limits — кто сколько израсходовал и у кого какой потолок
-/limit &lt;user_id&gt; &lt;сумма|нет|сброс&gt; — поменять потолок
+/limits — расход и лимиты; там же кнопки, чтобы поменять потолок
+/limit &lt;user_id&gt; &lt;сумма|нет|сброс&gt; — то же самое текстом
 """
 
 
@@ -226,27 +226,95 @@ async def cmd_users(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await reply(update, "\n".join(lines))
 
 
-@owner_only
-async def cmd_limits(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Кто сколько израсходовал за окно и какой у кого потолок."""
-    app = get_app(context)
+async def limits_screen(app) -> tuple[str, InlineKeyboardMarkup]:
+    """Общий экран: список людей текстом и те же люди кнопками."""
     lines = ["💰 <b>Расход и лимиты</b>", ""]
+    entries: list[tuple[int, str, str]] = []
 
-    for user_id, title in await _known_users(app):
+    for user_id, title, label in await _roster(app):
         quota = await app.quota_for(user_id)
         mark = "♾" if quota.unlimited else ("🚫" if not quota.allowed else "✅")
         lines.append(f"{mark} {title}\n   {quota.describe()}")
+        entries.append((user_id, f"{mark} {label}", quota.short()))
 
     default = app.settings.default_budget_usd
     window = app.settings.budget_window_hours // 24
     lines.append("")
     lines.append(f"По умолчанию новым: ${default:.2f} за {window} дн.")
-    lines.append(
-        "Изменить: <code>/limit &lt;user_id&gt; 20</code> · "
-        "снять: <code>/limit &lt;user_id&gt; нет</code> · "
-        "вернуть к умолчанию: <code>/limit &lt;user_id&gt; сброс</code>"
+    lines.append("Нажми на человека, чтобы поменять ему потолок.")
+    return "\n".join(lines), ui.limits_menu(entries)
+
+
+async def limit_card_screen(app, user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Карточка одного человека с кнопками сумм."""
+    quota = await app.quota_for(user_id)
+    title = next(
+        (t for uid, t, _ in await _roster(app) if uid == user_id),
+        f"<code>{user_id}</code>",
     )
-    await reply(update, "\n".join(lines))
+    text = "\n".join(
+        [
+            "💰 <b>Лимит расхода</b>",
+            "",
+            title,
+            quota.describe(),
+            "",
+            "Выбери потолок или сними ограничение совсем.",
+        ]
+    )
+    return text, ui.limit_card(user_id, quota.unlimited, quota.limit)
+
+
+@owner_only
+async def cmd_limits(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кто сколько израсходовал за окно и какой у кого потолок."""
+    text, markup = await limits_screen(get_app(context))
+    await reply(update, text, reply_markup=markup)
+
+
+async def on_limit_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Кнопки под /limits: выбрать человека и поменять ему потолок."""
+    query = update.callback_query
+    app = get_app(context)
+    if query is None or not query.data:
+        return
+    actor = update.effective_user
+    if actor is None or not app.access.is_owner(actor.id):
+        await query.answer("Только владелец может менять лимиты", show_alert=True)
+        return
+
+    parts = query.data.split(":")
+    action = parts[1]
+
+    if action == "list":
+        await query.answer()
+        text, markup = await limits_screen(app)
+        await _edit(query, text, markup)
+        return
+
+    user_id = int(parts[2])
+    note: str | None = None
+
+    if action == "set":
+        budget = float(parts[3])
+        await app.set_budget(user_id, budget)
+        await query.answer(f"Лимит ${budget:.0f}")
+        note = f"💰 Владелец обновил твой лимит: ${budget:.2f}"
+    elif action == "off":
+        await app.set_budget(user_id, None)
+        await query.answer("Без ограничений")
+        note = "♾ Владелец снял ограничение расхода"
+    elif action == "def":
+        await app.reset_budget(user_id)
+        await query.answer("Вернул умолчание")
+        note = f"💰 Владелец вернул лимит по умолчанию: ${app.settings.default_budget_usd:.2f}"
+    else:
+        await query.answer()
+
+    text, markup = await limit_card_screen(app, user_id)
+    await _edit(query, text, markup)
+    if note and not app.access.is_owner(user_id):
+        await _notify_user(context, user_id, note)
 
 
 @owner_only
@@ -293,20 +361,23 @@ async def cmd_limit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
-async def _known_users(app) -> list[tuple[int, str]]:
-    """Владелец, пущенные через .env, одобренные и все, у кого есть расход.
+async def _roster(app) -> list[tuple[int, str, str]]:
+    """Все, кого стоит показать: `(user_id, строка с HTML, подпись на кнопку)`.
 
-    Последнее важно: доступ могли отозвать после того, как человек уже потратил,
-    и без этого его расход просто исчезал бы из отчёта.
+    Владелец, пущенные через .env, одобренные — и отдельно все, у кого есть
+    расход: доступ могли отозвать уже после трат, и тогда они пропадали бы.
     """
-    seen: dict[int, str] = {app.settings.owner_id: f"Владелец · <code>{app.settings.owner_id}</code>"}
-    for user_id in sorted(app.settings.allowed_user_ids - {app.settings.owner_id}):
-        seen[user_id] = f"Из .env · <code>{user_id}</code>"
+    owner_id = app.settings.owner_id
+    seen: dict[int, tuple[str, str]] = {
+        owner_id: (f"Владелец · <code>{owner_id}</code>", "Владелец")
+    }
+    for user_id in sorted(app.settings.allowed_user_ids - {owner_id}):
+        seen[user_id] = (f"Из .env · <code>{user_id}</code>", f"id {user_id}")
     for record in await app.access.approved_users():
-        seen.setdefault(record.user_id, describe_user(record))
+        seen.setdefault(record.user_id, (describe_user(record), user_title(record)))
     for user_id in sorted(await app.spenders()):
-        seen.setdefault(user_id, f"Без доступа · <code>{user_id}</code>")
-    return list(seen.items())
+        seen.setdefault(user_id, (f"Без доступа · <code>{user_id}</code>", f"id {user_id}"))
+    return [(uid, title, label) for uid, (title, label) in seen.items()]
 
 
 @owner_only
@@ -367,11 +438,11 @@ async def on_access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await _edit(query, f"⛔️ Отказано: <code>{user_id}</code>")
 
 
-async def _edit(query, text: str) -> None:
+async def _edit(query, text: str, markup: InlineKeyboardMarkup | None = None) -> None:
     try:
-        await query.edit_message_text(text, parse_mode=ParseMode.HTML)
-    except Exception:  # noqa: BLE001
-        log.debug("Не смог обновить сообщение заявки", exc_info=True)
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    except Exception:  # noqa: BLE001 — в том числе «message is not modified»
+        log.debug("Не смог обновить сообщение", exc_info=True)
 
 
 async def _notify_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, text: str) -> None:
