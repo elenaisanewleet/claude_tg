@@ -143,7 +143,7 @@ sudo npm install -g @anthropic-ai/claude-code@latest
 
 # 2. Код
 sudo mkdir -p /opt/claude-tg && sudo chown "$USER" /opt/claude-tg
-git clone https://github.com/smmsemmers/claude_tg.git /opt/claude-tg
+git clone https://github.com/elenaisanewleet/claude_tg.git /opt/claude-tg
 cd /opt/claude-tg
 ./deploy/install.sh
 
@@ -179,7 +179,7 @@ sudo systemctl restart claude-tg     # перезапуск
 Если на сервере уже есть Docker — короче:
 
 ```bash
-git clone https://github.com/smmsemmers/claude_tg.git && cd claude_tg
+git clone https://github.com/elenaisanewleet/claude_tg.git && cd claude_tg
 cp .env.example .env && $EDITOR .env      # включая CLAUDE_CODE_OAUTH_TOKEN
 docker compose up -d --build
 docker compose logs -f

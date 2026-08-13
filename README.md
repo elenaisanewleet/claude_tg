@@ -52,7 +52,7 @@ Telegram  ──►  claude-tg (этот бот)  ──►  CLI `claude` (Claud
 ### Быстрый старт
 
 ```bash
-git clone https://github.com/smmsemmers/claude_tg.git
+git clone https://github.com/elenaisanewleet/claude_tg.git
 cd claude_tg
 
 ./deploy/install.sh          # venv, зависимости, проверка Claude Code
