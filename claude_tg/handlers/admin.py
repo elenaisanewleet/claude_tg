@@ -388,7 +388,10 @@ async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await reply(update, "Как пользоваться: <code>/grant &lt;user_id&gt;</code>")
         return
     await app.access.approve(user_id)
-    await reply(update, f"✅ Доступ открыт: <code>{user_id}</code>")
+    await _fetch_identity(context, app, user_id)
+    record = await app.storage.get_user(user_id)
+    who = describe_user(record) if record else f"<code>{user_id}</code>"
+    await reply(update, f"✅ Доступ открыт: {who}")
     await _notify_user(context, user_id, "✅ Доступ к боту открыт. Пиши — я на связи.")
 
 
@@ -429,6 +432,7 @@ async def on_access_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = int(raw_id)
     if decision == "approve":
         await app.access.approve(user_id)
+        await _fetch_identity(context, app, user_id)
         await query.answer("Доступ открыт")
         await _edit(query, f"✅ Доступ открыт: <code>{user_id}</code>")
         await _notify_user(context, user_id, "✅ Доступ к боту открыт. Пиши — я на связи.")
@@ -443,6 +447,22 @@ async def _edit(query, text: str, markup: InlineKeyboardMarkup | None = None) ->
         await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=markup)
     except Exception:  # noqa: BLE001 — в том числе «message is not modified»
         log.debug("Не смог обновить сообщение", exc_info=True)
+
+
+async def _fetch_identity(context: ContextTypes.DEFAULT_TYPE, app, user_id: int) -> None:
+    """Спросить имя у самого Telegram: `/grant` даёт нам только число.
+
+    Раньше имя появлялось, лишь когда человек напишет сам, — выданный по id
+    доступ оставлял в списках безымянную строку. Telegram отвечает, если человек
+    когда-либо писал боту или есть общая группа; если не ответил — не беда.
+    """
+    try:
+        chat = await context.bot.get_chat(user_id)
+    except Exception:  # noqa: BLE001 — Telegram может не знать этого человека
+        log.info("Telegram не отдал имя пользователя %s", user_id)
+        return
+    if chat.full_name or chat.username:
+        await app.storage.update_identity(user_id, chat.username, chat.full_name)
 
 
 async def _notify_user(context: ContextTypes.DEFAULT_TYPE, user_id: int, text: str) -> None:

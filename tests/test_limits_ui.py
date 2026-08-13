@@ -7,7 +7,12 @@ from claude_tg.access import AccessControl, user_title
 from claude_tg.app import AppContext
 from claude_tg.bridge import SessionManager
 from claude_tg.config import Settings
-from claude_tg.handlers.admin import _roster, limit_card_screen, limits_screen
+from claude_tg.handlers.admin import (
+    _fetch_identity,
+    _roster,
+    limit_card_screen,
+    limits_screen,
+)
 from claude_tg.storage import Storage, UserRecord
 
 OWNER = 100
@@ -147,6 +152,63 @@ def test_long_names_are_clipped_on_buttons():
     entries = [(1, "✅ " + "а" * 100, "$0.00 из $5.00")]
     markup = ui.limits_menu(entries)
     assert len(markup.inline_keyboard[0][0].text) < 60
+
+
+class FakeChat:
+    def __init__(self, username: str | None, full_name: str | None) -> None:
+        self.username = username
+        self.full_name = full_name
+
+
+class FakeBot:
+    """Telegram отвечает на get_chat, если человек когда-то писал боту."""
+
+    def __init__(self, chat: FakeChat | None = None, fails: bool = False) -> None:
+        self._chat = chat
+        self._fails = fails
+
+    async def get_chat(self, chat_id: int) -> FakeChat:
+        if self._fails:
+            raise RuntimeError("Bad Request: chat not found")
+        return self._chat
+
+
+class FakeContext:
+    def __init__(self, bot: FakeBot) -> None:
+        self.bot = bot
+
+
+async def test_grant_by_id_picks_up_the_name_from_telegram(app):
+    """Главное: имя должно появиться сразу, а не ждать первого сообщения."""
+    await app.access.approve(GUEST)
+    assert (await app.storage.get_user(GUEST)).full_name is None
+
+    context = FakeContext(FakeBot(FakeChat("kamilavanila", "Kamila")))
+    await _fetch_identity(context, app, GUEST)
+
+    record = await app.storage.get_user(GUEST)
+    assert record.full_name == "Kamila"
+    assert record.username == "kamilavanila"
+    assert record.status == "approved"
+
+
+async def test_grant_survives_telegram_not_knowing_the_person(app):
+    await app.access.approve(GUEST)
+    context = FakeContext(FakeBot(fails=True))
+
+    await _fetch_identity(context, app, GUEST)  # молча переживаем отказ
+
+    assert (await app.storage.get_user(GUEST)).status == "approved"
+
+
+async def test_empty_answer_does_not_wipe_a_known_name(app):
+    await app.access.approve(GUEST)
+    await app.access.check(FakeUser(GUEST, "olga", "Ольга"))
+
+    context = FakeContext(FakeBot(FakeChat(None, None)))
+    await _fetch_identity(context, app, GUEST)
+
+    assert (await app.storage.get_user(GUEST)).full_name == "Ольга"
 
 
 def test_user_title_falls_back_to_username_then_id():
